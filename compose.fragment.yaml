@@ -1,0 +1,22 @@
+services:
+  hello-agent:
+    build:
+      context: .
+    image: ghcr.io/brama-ai/hello-agent:main
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.hello-agent.rule=PathPrefix(`/`)
+      - traefik.http.routers.hello-agent.entrypoints=hello
+      - traefik.http.routers.hello-agent.middlewares=edge-auth@docker
+      - traefik.http.services.hello-agent.loadbalancer.server.port=80
+      - ai.platform.agent=true
+    networks:
+      - agents-internal
+    env_file:
+      - ./.env.local
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
