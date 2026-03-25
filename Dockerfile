@@ -1,29 +1,32 @@
-FROM php:8.5-apache
+# Stage 1: Composer dependencies
+FROM composer:2 AS vendor
+WORKDIR /app
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts --prefer-dist --ignore-platform-reqs
+COPY . .
+RUN composer dump-autoload --optimize --no-dev
 
-RUN apt-get update && apt-get install -y \
-        libicu-dev \
-        libzip-dev \
-        unzip \
+# Stage 2: Runtime (Alpine + PHP-FPM + Caddy)
+FROM php:8.5-fpm-alpine
+
+RUN apk add --no-cache caddy icu-libs libzip \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS icu-dev libzip-dev \
     && docker-php-ext-install zip \
-    && docker-php-ext-configure intl \
-    && docker-php-ext-install intl \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && docker-php-ext-configure intl && docker-php-ext-install intl \
+    && apk del .build-deps && rm -rf /tmp/pear
 
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
-
-COPY . /var/www/html/
-
-RUN a2enmod rewrite \
-    && sed -ri \
-        -e 's!/var/www/html!/var/www/html/public!g' \
-        /etc/apache2/sites-available/000-default.conf \
-        /etc/apache2/apache2.conf \
-    && sed -ri \
-        -e 's/AllowOverride None/AllowOverride All/g' \
-        /etc/apache2/apache2.conf
+RUN echo ':80 {' > /etc/caddy/Caddyfile \
+    && echo '    root * /var/www/html/public' >> /etc/caddy/Caddyfile \
+    && echo '    php_fastcgi 127.0.0.1:9000' >> /etc/caddy/Caddyfile \
+    && echo '    file_server' >> /etc/caddy/Caddyfile \
+    && echo '}' >> /etc/caddy/Caddyfile
 
 WORKDIR /var/www/html
+COPY --from=vendor /app /var/www/html/
+RUN mkdir -p var/cache var/log && chmod -R 777 var/
 
-RUN composer install --no-dev --optimize-autoloader --no-interaction
+RUN printf '#!/bin/sh\nphp-fpm -D\nexec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile\n' > /usr/local/bin/start.sh \
+    && chmod +x /usr/local/bin/start.sh
 
 EXPOSE 80
+CMD ["/usr/local/bin/start.sh"]
